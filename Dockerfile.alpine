@@ -1,0 +1,31 @@
+FROM alpine AS build
+
+RUN apk --no-cache add \
+  build-base \
+  cmake \
+  git \
+  libcap-dev \
+  libnl3-dev \
+  libpcap-dev \
+  librtlsdr-dev \
+  libusb-dev \
+  libwebsockets-dev \
+  linux-headers \
+  mosquitto-dev \
+  openssl-dev \
+  pcre2-dev \
+  protobuf-dev \
+  protobuf-c-dev \
+  py3-setuptools \
+  rtl_433 \
+  sqlite-dev \
+  zlib-dev
+
+FROM build
+
+ENV CFLAGS="-flto -O3 -fhardened"
+ENV CXXFLAGS="-flto -O3 -fhardened"
+
+copy all-build.sh /
+copy all-no-wext-build.sh /
+copy default-build.sh /
