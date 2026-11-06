@@ -1,0 +1,76 @@
+# Builds each image, builds the latest Kismet in it with every build script,
+# and only then, on main, pushes it to GitHub Container Registry under the
+# names Kismet's workflows use.
+name: build
+
+on:
+  push:
+    branches: [main]
+    paths: &paths
+      - Dockerfile.*
+      - '*.sh'
+      - tools/test-kismet-build.sh
+      - .github/workflows/build.yml
+  pull_request:
+    paths: *paths
+  # The distributions and Kismet move on without any change here.
+  schedule:
+    - cron: '37 5 * * 4'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: ${{ matrix.dockerfile }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dockerfile: Dockerfile.alpine
+            image: build-alpine-amd64
+          - dockerfile: Dockerfile.ubuntu2404
+            image: build-ubuntu-noble-amd64
+          - dockerfile: Dockerfile.ubuntu2604
+            image: build-ubuntu-resolute-amd64
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # The label links a new package to this repository, which gives this
+      # repository's workflows write access to it.
+      - name: Build the image
+        env:
+          DOCKERFILE: ${{ matrix.dockerfile }}
+        run: |
+          docker build --pull --no-cache -f "${DOCKERFILE}" \
+            --label "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            -t kismet-build:test .
+
+      - name: Build Kismet with each build script
+        run: ./tools/test-kismet-build.sh kismet-build:test
+
+      - name: Publish to GitHub Container Registry
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          IMAGE: ${{ matrix.image }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/kismet/${IMAGE}"
+          date="$(date -u +%Y%m%d)"
+          printf '%s\n' "${GITHUB_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          docker tag kismet-build:test "${image}:${date}"
+          docker tag kismet-build:test "${image}:latest"
+          docker push "${image}:${date}"
+          docker push "${image}:latest"
+          echo "Published ${image}:${date} and ${image}:latest" >> "${GITHUB_STEP_SUMMARY}"
