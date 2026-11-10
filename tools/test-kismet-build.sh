@@ -30,8 +30,23 @@ endgroup() {
 	if [ -n "${GITHUB_ACTIONS:-}" ]; then echo "::endgroup::"; fi
 }
 
+# Usage: fail TITLE MESSAGE, from inside a group. On GitHub the message becomes
+# an error annotation shown under the job's name in the run summary.
+fail() {
+	endgroup
+	if [ -n "${GITHUB_ACTIONS:-}" ]; then
+		echo "::error title=$1::$2"
+	else
+		echo "$2" >&2
+	fi
+	exit 1
+}
+
 group "Clone ${repo} ${ref}"
-run --entrypoint git "${image}" -c safe.directory='*' clone --depth 1 --branch "${ref}" "${repo}" .
+run --entrypoint git "${image}" -c safe.directory='*' clone --depth 1 --branch "${ref}" "${repo}" . ||
+	fail "Kismet clone failed" "git clone of ${repo} ${ref} failed"
+rev="$(run --entrypoint git "${image}" -c safe.directory='*' log -1 --format='%h')" ||
+	fail "Kismet clone failed" "reading the commit of the ${repo} ${ref} clone failed"
 run --entrypoint git "${image}" -c safe.directory='*' log -1 --format='Kismet %H %cI %s'
 endgroup
 
@@ -39,16 +54,14 @@ first=1
 for script in "${scripts[@]}"; do
 	if [ -z "${first}" ]; then
 		group "make clean"
-		run --entrypoint make "${image}" clean
+		run --entrypoint make "${image}" clean ||
+			fail "make clean failed" "make clean before ${script} failed on Kismet ${rev} in ${image}"
 		endgroup
 	fi
 	first=
 	group "${script}"
-	if ! run --entrypoint "/${script}" "${image}"; then
-		endgroup
-		echo "${script} failed in ${image}" >&2
-		exit 1
-	fi
+	run --entrypoint "/${script}" "${image}" ||
+		fail "${script} failed" "${script} failed building Kismet ${rev} in ${image}"
 	endgroup
 done
 
